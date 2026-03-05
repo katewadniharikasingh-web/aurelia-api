@@ -11,7 +11,7 @@ CORS(app)
 model  = pickle.load(open('aurelia_model.pkl',  'rb'))
 scaler = pickle.load(open('aurelia_scaler.pkl', 'rb'))
 
-# Expected feature order for model
+# Expected feature order
 FEATURES = [
     'pain_score',
     'dyspareunia',
@@ -28,15 +28,19 @@ FEATURES = [
 def health():
     return jsonify({"status": "Aurelia API is running"})
 
+
 @app.route('/predict', methods=['POST'])
 def predict():
     try:
+
         data = request.get_json()
 
         if not data:
             return jsonify({"error": "No JSON received"}), 400
 
-        # ---- Default baseline values ----
+        print("Received:", data)
+
+        # Default values
         default_values = {
             'pain_score': 0,
             'dyspareunia': 0,
@@ -46,51 +50,78 @@ def predict():
             'menstrual_irregularity': 0,
             'hormone_abnormality': 0,
             'delta_T': 0,
-            'hrv': 0
+            'hrv': 40
         }
 
-        # Merge incoming fields
+        # Merge incoming JSON
         for key in default_values:
             if key in data:
                 default_values[key] = float(data[key])
 
-        # If ESP32 sends delta_temp instead of delta_T
+        # ESP32 compatibility
         if 'delta_temp' in data:
             default_values['delta_T'] = float(data['delta_temp'])
 
-        # If ESP32 sends bpm instead of hrv
         if 'bpm' in data:
-            # Temporary simple mapping (can replace with real HRV later)
             default_values['hrv'] = float(data['bpm']) / 100.0
 
-        # Build feature array in correct order
+        # Build feature array
         input_data = np.array([[default_values[f] for f in FEATURES]])
 
         # Scale input
         input_scaled = scaler.transform(input_data)
 
-        # Predict probability
+        # ML prediction
         risk_score = float(model.predict_proba(input_scaled)[0][1])
 
-        # Risk categorization
-        if risk_score >= 0.65:
+        # ---------------------------
+        # Symptom scoring
+        # ---------------------------
+
+        symptom_sum = (
+            default_values['pain_score'] +
+            default_values['dyspareunia'] +
+            default_values['bowel_pain'] +
+            default_values['infertility'] +
+            default_values['progressive_pain'] +
+            default_values['menstrual_irregularity'] +
+            default_values['hormone_abnormality']
+        )
+
+        # ---------------------------
+        # Hybrid Decision System
+        # ---------------------------
+
+        if symptom_sum >= 5 or risk_score >= 0.65:
+
             risk_level = "High Risk"
             message = "Your symptom pattern suggests high risk. Please consult a gynecologist."
             color = "red"
-        elif risk_score >= 0.35:
+
+        elif symptom_sum >= 3 or risk_score >= 0.35:
+
             risk_level = "Moderate Risk"
             message = "Some risk indicators detected. Consider speaking with a healthcare provider."
             color = "orange"
+
         else:
+
             risk_level = "Low Risk"
             message = "Low risk indicators detected. Continue monitoring."
             color = "green"
 
+        # Return result
         return jsonify({
-            "risk_score": round(risk_score, 3),
+
+            "risk_score": round(risk_score * 100, 1),
             "risk_level": risk_level,
             "message": message,
-            "color": color
+            "color": color,
+
+            # Sensor values returned to frontend
+            "delta_T": round(default_values['delta_T'], 2),
+            "hrv": round(default_values['hrv'], 2)
+
         })
 
     except Exception as e:
@@ -98,5 +129,6 @@ def predict():
 
 
 if __name__ == '__main__':
+
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
